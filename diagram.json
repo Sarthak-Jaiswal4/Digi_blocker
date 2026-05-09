@@ -1,0 +1,55 @@
+{
+  "metadata": {
+    "name": "Simple Feedback System",
+    "description": "Single input, gain block, takeoff and feedback loop",
+    "version": "1.0"
+  },
+  "nodes": [
+    {
+      "id": "node-1",
+      "type": "input",
+      "label": "Input",
+      "value": "R(s)"
+    },
+    {
+      "id": "node-2",
+      "type": "gain",
+      "label": "Gain",
+      "value": "K"
+    },
+    {
+      "id": "node-3",
+      "type": "takeoff",
+      "label": "Takeoff"
+    },
+    {
+      "id": "node-4",
+      "type": "output",
+      "label": "Output",
+      "value": "C(s)"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-1",
+      "source": "node-1",
+      "target": "node-2"
+    },
+    {
+      "id": "edge-2",
+      "source": "node-2",
+      "target": "node-3"
+    },
+    {
+      "id": "edge-3",
+      "source": "node-3",
+      "target": "node-4"
+    },
+    {
+      "id": "edge-4",
+      "source": "node-3",
+      "target": "node-2",
+      "type": "feedback"
+    }
+  ]
+}

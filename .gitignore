@@ -1,0 +1,10 @@
+<<<<<<< HEAD
+node_modules/
+dist/
+.DS_Store
+*.log
+=======
+node_modules
+.env
+.env.*
+>>>>>>> d309e7c (deployed)

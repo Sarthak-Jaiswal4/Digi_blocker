@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Block Diagram & Signal Flow Graph Reduction Tool</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container" id="app">
+        <header class="header">
+            <h1>Digi-Blocker</h1>
+            <div class="header-buttons">
+                <button id="saveBtn" class="btn btn-success" type="button">Save</button>
+                <button id="loadBtn" class="btn btn-info" type="button">Load</button>
+                <button id="clearBtn" class="btn btn-secondary" type="button">Clear</button>
+                <button id="reduceBtn" class="btn btn-primary" type="button">Reduce Graph</button>
+                <button id="exportBtn" class="btn btn-secondary" type="button">Export</button>
+                <button id="undoBtn" class="btn btn-secondary" type="button">Undo</button>
+                <button id="redoBtn" class="btn btn-secondary" type="button">Redo</button>
+                <button id="workspaceToggleBtn" class="btn btn-secondary" type="button">Maximize Workspace</button>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <aside class="toolbar">
+                <div class="toolbar-header">
+                    <h3>Blocks</h3>
+                    <div class="toolbar-search">
+                        <input type="search" id="blockSearch" placeholder="Search blocks..." aria-label="Search blocks">
+                    </div>
+                </div>
+
+                <div class="toolbar-section">
+                    <h4>Basic Blocks</h4>
+                    <button class="block-item" data-type="gain" draggable="true" type="button">
+                        <div class="block-icon gain-block">G</div>
+                        <span>Gain</span>
+                    </button>
+                    <button class="block-item" data-type="summer" draggable="true" type="button">
+                        <div class="block-icon summer-icon">&Sigma;</div>
+                        <span>Summer</span>
+                    </button>
+                    <button class="block-item" data-type="integrator" draggable="true" type="button">
+                        <div class="block-icon integrator-block">1/s</div>
+                        <span>Integrator</span>
+                    </button>
+                    <button class="block-item" data-type="differentiator" draggable="true" type="button">
+                        <div class="block-icon differentiator-block">s</div>
+                        <span>Differentiator</span>
+                    </button>
+                    <button class="block-item" data-type="takeoff" draggable="true" type="button">
+                        <div class="block-icon takeoff-icon"></div>
+                        <span>Take Off</span>
+                    </button>
+                </div>
+
+                <div class="toolbar-section">
+                    <h4>Input/Output</h4>
+                    <button class="block-item" data-type="input" draggable="true" type="button">
+                        <div class="block-icon input-block">In</div>
+                        <span>Input</span>
+                    </button>
+                    <button class="block-item" data-type="output" draggable="true" type="button">
+                        <div class="block-icon output-block">Out</div>
+                        <span>Output</span>
+                    </button>
+                </div>
+            </aside>
+
+            <main class="workspace" id="workspace">
+                <div class="workspace-controls">
+                    <div class="zoom-controls">
+                        <button id="zoomInBtn" class="zoom-btn" title="Zoom In" type="button">+</button>
+                        <span id="zoomLabel">100%</span>
+                        <button id="zoomOutBtn" class="zoom-btn" title="Zoom Out" type="button">-</button>
+                        <button id="zoomResetBtn" class="zoom-btn" title="Reset Zoom" type="button">Reset</button>
+                    </div>
+                    <div class="view-controls">
+                        <button id="panBtn" class="view-btn" title="Pan Mode" type="button">Pan</button>
+                        <button id="selectBtn" class="view-btn active" title="Select Mode" type="button">Select</button>
+                    </div>
+                    <div class="workspace-hint" id="status-text">Click an output port, then an input port to connect. Click a wire to split it with a takeoff node.</div>
+                </div>
+
+                <div class="canvas-container" id="workspaceShell">
+                    <div class="viewport" id="viewport">
+                        <div class="scene" id="scene">
+                            <svg class="connection-layer" id="connectionLayer" xmlns="http://www.w3.org/2000/svg">
+                                <defs>
+                                    <marker id="arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+                                        <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path>
+                                    </marker>
+                                </defs>
+                            </svg>
+                            <div id="blocks-container" class="blocks-layer"></div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+
+            <aside class="properties-panel">
+                <h3>Properties</h3>
+                <div id="properties-content">
+                    <p class="placeholder">Select a block to edit properties</p>
+                </div>
+                <div class="diagram-insights" aria-live="polite">
+                    <div class="insights-header">
+                        <h4>Diagram Insights</h4>
+                        <span class="complexity-badge" id="complexityBadge">Working</span>
+                    </div>
+                    <div class="insight-row">
+                        <span>Nodes</span>
+                        <strong id="nodeCount">0</strong>
+                    </div>
+                    <div class="insight-row">
+                        <span>Connections</span>
+                        <strong id="edgeCount">0</strong>
+                    </div>
+                    <div class="insight-row">
+                        <span>Mode</span>
+                        <strong id="modeLabel">Select</strong>
+                    </div>
+                </div>
+            </aside>
+        </div>
+
+        <footer class="status-bar">
+            <span id="coordinates">X: 0, Y: 0</span>
+            <span id="block-count">Blocks: 0</span>
+            <span id="connection-count">Connections: 0</span>
+        </footer>
+    </div>
+
+    <script type="module" src="editor-runtime.js"></script>
+</body>
+</html>
