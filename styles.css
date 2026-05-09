@@ -146,6 +146,10 @@ body {
     transition: all 0.2s;
 }
 
+.block-item > * {
+    pointer-events: none;
+}
+
 .block-item:hover {
     border-color: #1976d2;
     background: #f5f9ff;

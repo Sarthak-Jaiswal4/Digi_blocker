@@ -134,6 +134,7 @@ const FinalSchema = z.object({
 
 const DEFAULT_SCENE = { width: 4000, height: 2500 };
 const STORAGE_KEY = 'digiblocker-diagram';
+const BACKEND_URL = 'https://digi-blocker-backend-05l6.onrender.com/solve';
 const MAX_HISTORY = 100;
 const ROUTE = {
     stub: 34,
@@ -243,7 +244,7 @@ class DiagramEditor {
         this.el.saveBtn.addEventListener('click', () => this.saveToLocal());
         this.el.loadBtn.addEventListener('click', () => this.loadFromLocal());
         this.el.exportBtn.addEventListener('click', () => this.exportSvg());
-        this.el.reduceBtn.addEventListener('click', () => this.setStatus('Reduction backend is not wired in this minimal editor.'));
+        this.el.reduceBtn.addEventListener('click', () => this.solveGraph());
 
         this.el.workspaceShell.addEventListener('wheel', (event) => {
             event.preventDefault();
@@ -742,6 +743,7 @@ class DiagramEditor {
                 to: e.targetNode
             }))
         };
+        console.log(rawData)
 
         let validatedData;
         try {
@@ -763,6 +765,271 @@ class DiagramEditor {
         console.log("Saved Data:", validatedData);
         localStorage.setItem(STORAGE_KEY, JSON.stringify(this.cloneState()));
         this.setStatus('Saved locally');
+    }
+
+    // ─── Backend solve helpers ───────────────────────────────────
+
+    mapNodeType(editorType) {
+        const map = { input:'source', output:'sink', gain:'gain', integrator:'gain', differentiator:'gain', summer:'summer', takeoff:'dot' };
+        return map[editorType] || editorType;
+    }
+
+    mapTfValue(editorType, userValue) {
+        if (['input','output','summer','takeoff'].includes(editorType)) return '1;1';
+        const v = (userValue || '').trim();
+        if (editorType === 'integrator' || v === '1/s') return '1;1 0';
+        if (editorType === 'differentiator' || v === 's') return '1 0;1';
+        const num = Number(v);
+        if (!isNaN(num) && v !== '') return `${num};1`;
+        if (v.includes(';')) return v;
+        return '2;1';
+    }
+
+    isFeedbackEdge(edge) {
+        const src = this.getNode(edge.sourceNode);
+        const tgt = this.getNode(edge.targetNode);
+        if (!src || !tgt) return false;
+        if (tgt.type !== 'summer') return false;
+        return src.position.x >= tgt.position.x;
+    }
+
+    buildBackendPayload() {
+        const idMap = {};
+        let cloneCount = 0;
+        this.state.nodes.forEach((n) => {
+            if (n.type !== 'takeoff') return;
+            const fbOuts = this.state.edges.filter(
+                (e) => e.sourceNode === n.id && this.isFeedbackEdge(e)
+            );
+            if (fbOuts.length > 1) cloneCount += fbOuts.length - 1;
+        });
+        const totalNodes = this.state.nodes.length + cloneCount;
+        const idPadLen = Math.max(2, String(totalNodes).length);
+        const formatNodeId = (seq) => `n${String(seq).padStart(idPadLen, '0')}`;
+
+        let nodeSeq = 0;
+        this.state.nodes.forEach((n) => {
+            idMap[n.id] = formatNodeId(++nodeSeq);
+        });
+
+        let gainCounter = 1;
+        const usedLabels = new Set();
+
+        const nodes = this.state.nodes.map(n => {
+            const backendType = this.mapNodeType(n.type);
+            let baseLabel = '';
+            if (backendType === 'gain') {
+                let candidate = `K${gainCounter++}`;
+                while (usedLabels.has(candidate)) candidate = `K${gainCounter++}`;
+                usedLabels.add(candidate);
+                baseLabel = candidate;
+            } else if (backendType === 'source') {
+                baseLabel = 'R(s)';
+            } else if (backendType === 'sink') {
+                baseLabel = 'C(s)';
+            }
+            return {
+                id: idMap[n.id],
+                type: backendType,
+                x: Math.round(n.position.x),
+                y: Math.round(n.position.y),
+                baseLabel,
+                tfValue: this.mapTfValue(n.type, n.data.value),
+                latex_exp: baseLabel || undefined
+            };
+        });
+
+        // Dedicated dot per feedback loop
+        const dotFbMap = new Map();
+        this.state.nodes.forEach(n => {
+            if (n.type !== 'takeoff') return;
+            const fbOuts = this.state.edges.filter(e =>
+                e.sourceNode === n.id && this.isFeedbackEdge(e)
+            );
+            if (fbOuts.length > 1) dotFbMap.set(n.id, fbOuts);
+        });
+        const edgeIdRemaps = new Map();
+        dotFbMap.forEach((fbEdges, dotId) => {
+            for (let i = 1; i < fbEdges.length; i++) {
+                const cloneId = formatNodeId(++nodeSeq);
+                const orig = nodes.find(nd => nd.id === idMap[dotId]);
+                if (!orig) continue;
+                nodes.push({ id: cloneId, type:'dot', x: Math.round(orig.x), y: Math.round(orig.y + i*10), baseLabel:'', tfValue:'1;1' });
+                edgeIdRemaps.set(fbEdges[i].id, cloneId);
+            }
+        });
+
+        let edgeCounter = 1;
+        const edges = this.state.edges.map(e => {
+            let fromId = idMap[e.sourceNode];
+            if (edgeIdRemaps.has(e.id)) fromId = edgeIdRemaps.get(e.id);
+            return {
+                id: `e${edgeCounter++}`,
+                from: fromId,
+                to: idMap[e.targetNode],
+                tf: this.isFeedbackEdge(e) ? '-1;1' : '1;1'
+            };
+        });
+        dotFbMap.forEach((fbEdges, dotId) => {
+            for (let i = 1; i < fbEdges.length; i++) {
+                const cloneId = edgeIdRemaps.get(fbEdges[i].id);
+                if (cloneId) edges.push({ id:`e${edgeCounter++}`, from: idMap[dotId], to: cloneId, tf:'1;1' });
+            }
+        });
+
+        return { nodes, edges, remake: false };
+    }
+
+    validatePayload(payload) {
+        const errors = [];
+
+        const nodeMap = new Map(payload.nodes.map(n => [n.id, n]));
+        const backwardIntoSummer = (e) => {
+            const src = nodeMap.get(e.from);
+            const tgt = nodeMap.get(e.to);
+            return Boolean(src && tgt && tgt.type === 'summer' && src.x >= tgt.x);
+        };
+
+        // Rule 2: IDs n + at least two zero-padded digits (n01, …)
+        const idRe = /^n\d{2,}$/;
+        payload.nodes.forEach(n => {
+            if (!idRe.test(n.id)) errors.push(`Node "${n.id}": invalid ID (must be "n" + two or more digits, e.g. n01)`);
+        });
+
+        // Rule 10: Whole-integer coordinates
+        payload.nodes.forEach(n => {
+            if (!Number.isInteger(n.x) || !Number.isInteger(n.y))
+                errors.push(`Node "${n.id}": coordinates must be integers (x=${n.x}, y=${n.y})`);
+        });
+
+        // Rule 1: Source / sink canonical baseLabel
+        payload.nodes.filter(n => n.type === 'source').forEach(n => {
+            if (n.baseLabel !== 'R(s)') errors.push(`Source "${n.id}" must use baseLabel "R(s)" (got "${n.baseLabel ?? ''}")`);
+        });
+        payload.nodes.filter(n => n.type === 'sink').forEach(n => {
+            if (n.baseLabel !== 'C(s)') errors.push(`Sink "${n.id}" must use baseLabel "C(s)" (got "${n.baseLabel ?? ''}")`);
+        });
+
+        // Rule 6: Unique gain baseLabel
+        const seen = new Set();
+        payload.nodes.filter(n => n.type === 'gain').forEach(n => {
+            if (!n.baseLabel) errors.push(`Gain "${n.id}" is missing a baseLabel`);
+            if (seen.has(n.baseLabel)) errors.push(`Duplicate gain baseLabel "${n.baseLabel}"`);
+            seen.add(n.baseLabel);
+        });
+
+        // Rule 7: Gains never use tfValue "1;1"
+        payload.nodes.filter(n => n.type === 'gain').forEach(n => {
+            if (n.tfValue === '1;1') errors.push(`Gain "${n.id}" must not use tfValue "1;1" (use e.g. "2;1" or "1;1 0" for integrator)`);
+        });
+
+        const outEdges = new Map();
+        payload.nodes.forEach(n => outEdges.set(n.id, []));
+        payload.edges.forEach(e => {
+            if (outEdges.has(e.from)) outEdges.get(e.from).push(e);
+        });
+
+        // Rule 3: Dots branch — ≥2 outgoing, plus ≥1 forward and ≥1 feedback
+        payload.nodes.filter(n => n.type === 'dot').forEach(dot => {
+            const outgoing = outEdges.get(dot.id) || [];
+            if (outgoing.length < 2) errors.push(`Dot "${dot.id}" must have at least 2 outgoing edges (has ${outgoing.length})`);
+            let hasFeedback = false;
+            let hasForward = false;
+            outgoing.forEach(e => {
+                if (backwardIntoSummer(e)) hasFeedback = true;
+                else hasForward = true;
+            });
+            if (outgoing.length >= 2 && (!hasFeedback || !hasForward)) {
+                errors.push(`Dot "${dot.id}" must have at least one forward branch and one feedback branch into a summer`);
+            }
+        });
+
+        // Rule 4: Summer needs ≥2 incoming edges
+        const inCount = new Map();
+        payload.nodes.forEach(n => inCount.set(n.id, 0));
+        payload.edges.forEach(e => { if (inCount.has(e.to)) inCount.set(e.to, inCount.get(e.to) + 1); });
+        payload.nodes.filter(n => n.type === 'summer').forEach(n => {
+            const c = inCount.get(n.id) || 0;
+            if (c < 2) errors.push(`Summer "${n.id}" must have at least 2 incoming edges (has ${c})`);
+        });
+
+        // Rule 8: One feedback path per dot (into summer backward)
+        const dotFbOutCount = new Map();
+        payload.edges.forEach(e => {
+            const src = nodeMap.get(e.from);
+            const tgt = nodeMap.get(e.to);
+            if (src && tgt && src.type === 'dot' && tgt.type === 'summer' && src.x >= tgt.x) {
+                dotFbOutCount.set(e.from, (dotFbOutCount.get(e.from) || 0) + 1);
+            }
+        });
+        dotFbOutCount.forEach((count, dotId) => {
+            if (count > 1) errors.push(`Dot "${dotId}" feeds ${count} feedback loops — each loop needs its own dot`);
+        });
+
+        // Rule 5: tf — backward into summer "-1;1", otherwise "1;1"
+        payload.edges.forEach(e => {
+            const want = backwardIntoSummer(e) ? '-1;1' : '1;1';
+            if (e.tf !== want) errors.push(`Edge "${e.id}" (${e.from}→${e.to}) must have tf "${want}", got "${e.tf ?? ''}"`);
+        });
+
+        // Rule 9: No dead-end except sink
+        const outCount = new Map();
+        payload.nodes.forEach(n => outCount.set(n.id, 0));
+        payload.edges.forEach(e => { if (outCount.has(e.from)) outCount.set(e.from, outCount.get(e.from) + 1); });
+        payload.nodes.forEach(n => {
+            if (n.type !== 'sink' && (outCount.get(n.id) || 0) === 0)
+                errors.push(`Dead-end: "${n.id}" (${n.type}) has no outgoing edges`);
+        });
+
+        return errors;
+    }
+
+    async solveGraph() {
+        const payload = this.buildBackendPayload();
+        const errors = this.validatePayload(payload);
+        if (errors.length > 0) {
+            console.error('Validation failed:', errors);
+            this.setStatus(`Solve blocked: ${errors[0]}`);
+            alert('Cannot solve — fix these issues:\n\n• ' + errors.join('\n• '));
+            return;
+        }
+
+        this.el.reduceBtn.disabled = true;
+        this.el.reduceBtn.textContent = 'Solving…';
+        this.setStatus('Sending diagram to solver…');
+
+        try {
+            console.log(payload)
+            const res = await fetch(BACKEND_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!res.ok) throw new Error(`Server ${res.status}: ${await res.text()}`);
+
+            const result = await res.json();
+            let validated;
+            try { validated = FinalSchema.parse(result); }
+            catch { validated = result; }
+
+            console.log('Solver response:', validated);
+            this.setStatus('Reduction complete ✓');
+            this.lastSolverResult = validated;
+
+            const blob = new Blob([JSON.stringify(validated, null, 2)], { type:'application/json' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'solution.json';
+            a.click();
+            URL.revokeObjectURL(a.href);
+        } catch (err) {
+            console.error('Solve failed:', err);
+            this.setStatus(`Solve failed: ${err.message}`);
+            alert(`Solver error:\n${err.message}`);
+        } finally {
+            this.el.reduceBtn.disabled = false;
+            this.el.reduceBtn.textContent = 'Reduce Graph';
+        }
     }
 
     loadFromLocal() {
