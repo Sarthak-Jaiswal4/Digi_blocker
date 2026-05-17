@@ -134,7 +134,7 @@ const FinalSchema = z.object({
 
 const DEFAULT_SCENE = { width: 4000, height: 2500 };
 const STORAGE_KEY = 'digiblocker-diagram';
-const BACKEND_URL = 'https://digi-blocker-backend-05l6.onrender.com/solve';
+const BACKEND_URL = 'https://redirect-k8dk.onrender.com/solve';
 const MAX_HISTORY = 100;
 const ROUTE = {
     stub: 34,
@@ -1009,19 +1009,19 @@ class DiagramEditor {
 
             const result = await res.json();
             let validated;
-            try { validated = FinalSchema.parse(result); }
-            catch { validated = result; }
+            console.log(result)
+            // try { validated = FinalSchema.parse(result); }
+            // catch { validated = result; }
 
             console.log('Solver response:', validated);
             this.setStatus('Reduction complete ✓');
             this.lastSolverResult = validated;
 
-            const blob = new Blob([JSON.stringify(validated, null, 2)], { type:'application/json' });
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = 'solution.json';
-            a.click();
-            URL.revokeObjectURL(a.href);
+            if (result && result.redirect_url) {
+                window.location.href = result.redirect_url;
+            } else if (validated && validated.redirect_url) {
+                window.location.href = validated.redirect_url;
+            }
         } catch (err) {
             console.error('Solve failed:', err);
             this.setStatus(`Solve failed: ${err.message}`);
